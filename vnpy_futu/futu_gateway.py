@@ -437,7 +437,16 @@ class FutuGateway(BaseGateway):
         """查询历史数据"""
         bars: List[BarData] = []
 
-        if req.interval != Interval.MINUTE:
+        # 根据请求的时间间隔设置对应的K线类型
+        kline_type = KLType.K_1M  # 默认为1分钟
+        
+        if req.interval == Interval.MINUTE:
+            kline_type = KLType.K_1M
+        elif req.interval == Interval.HOUR:
+            kline_type = KLType.K_60M
+        elif req.interval == Interval.DAILY:
+            kline_type = KLType.K_DAY
+        else:
             self.write_log(f"获取K线数据失败，FUTU接口暂不提供{req.interval.value}级别历史数据")
             return bars
 
@@ -445,20 +454,20 @@ class FutuGateway(BaseGateway):
         start_date: str = req.start.replace(tzinfo=None).strftime("%Y-%m-%d")
         end_date: str = req.end.replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
 
-        ret, history_df, page_req_key = self.quote_ctx.request_history_kline(code=symbol, start=start_date, end=end_date, ktype=KLType.K_1M)  # 每页5个，请求第一页
+        ret, history_df, page_req_key = self.quote_ctx.request_history_kline(code=symbol, start=start_date, end=end_date, ktype=kline_type)  # 每页5个，请求第一页
         if ret != RET_OK:
             self.write_log(f"获取K线数据失败，原因：{history_df}")
             return bars
 
         while page_req_key != None:  # 请求后面的所有结果
-            ret, data, page_req_key = self.quote_ctx.request_history_kline(code=symbol, start=start_date, end=end_date, ktype=KLType.K_1M, page_req_key=page_req_key)   # 请求翻页后的数据
+            ret, data, page_req_key = self.quote_ctx.request_history_kline(code=symbol, start=start_date, end=end_date, ktype=kline_type, page_req_key=page_req_key)   # 请求翻页后的数据
             if ret == RET_OK:
-                history_df = history_df.append(data, ignore_index=True)
+                history_df = pd.concat([history_df, data], ignore_index=True)
             else:
                 self.write_log(f"{data}")
 
         history_df["time_key"] = pd.to_datetime(history_df["time_key"])
-        history_df["time_key"] = history_df["time_key"] - pd.Timedelta(1, "m")
+        # history_df["time_key"] = history_df["time_key"] - pd.Timedelta(1, "m")
         history_df["time_key"] = history_df["time_key"].dt.strftime("%Y-%m-%d %H:%M:%S")
 
         for ix, row in history_df.iterrows():
@@ -467,7 +476,7 @@ class FutuGateway(BaseGateway):
                 symbol=req.symbol,
                 exchange=req.exchange,
                 datetime=generate_datetime(row["time_key"]),
-                interval=Interval.MINUTE,
+                interval=req.interval,
                 volume=row["volume"],
                 turnover=row["turnover"],
                 open_interest=0,
